@@ -72,11 +72,15 @@ class DecodeTests(unittest.TestCase):
 
 
 class TargetTests(unittest.TestCase):
-    def test_matches_configured_address_or_meter_plus(self):
-        # Kept until Task 3 rewrites is_target. Still the old "any Plus" behaviour.
-        self.assertTrue(rs.is_target("C8:92:04:06:1C:2C", "Meter Plus"))
-        self.assertTrue(rs.is_target("AA:BB:CC:DD:EE:FF", "Meter Plus"))
-        self.assertFalse(rs.is_target("7B:E6:AD:F0:A4:AB", None))
+    def test_configured_mac_only(self):
+        self.assertTrue(rs.is_target(CAPTURED_ADDR, CAPTURED_ADDR))
+        self.assertFalse(rs.is_target(OTHER_ADDR, CAPTURED_ADDR))
+        self.assertFalse(rs.is_target(OTHER_ADDR, "Meter Plus"))
+
+    def test_empty_config_accepts_first_meter(self):
+        self.assertTrue(rs.is_target(CAPTURED_ADDR, ""))
+        self.assertTrue(rs.is_target(OTHER_ADDR, None))
+        self.assertTrue(rs.is_target(OTHER_ADDR, "  "))
 
 
 class FormatTests(unittest.TestCase):

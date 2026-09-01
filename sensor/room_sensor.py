@@ -39,8 +39,26 @@ def load_config() -> dict[str, Any]:
     cfg = dict(DEFAULT_CONFIG)
     if CONFIG_PATH.exists():
         cfg.update(json.loads(CONFIG_PATH.read_text()))
-    cfg["address"] = str(cfg["address"]).upper()
+    cfg["address"] = str(cfg.get("address") or "").upper()
+    cfg["http"] = bool(cfg.get("http", False))
     return cfg
+
+
+def save_config(cfg: dict[str, Any]) -> None:
+    CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_json(
+        CONFIG_PATH,
+        {
+            "address": str(cfg.get("address") or "").upper(),
+            "listen": cfg.get("listen", DEFAULT_CONFIG["listen"]),
+            "port": int(cfg.get("port", DEFAULT_CONFIG["port"])),
+            "stale_seconds": int(cfg.get("stale_seconds", DEFAULT_CONFIG["stale_seconds"])),
+            "scanner_restart_seconds": int(
+                cfg.get("scanner_restart_seconds", DEFAULT_CONFIG["scanner_restart_seconds"])
+            ),
+            "http": bool(cfg.get("http", False)),
+        },
+    )
 
 
 def now_local() -> datetime:
@@ -116,11 +134,11 @@ def decode_advertisement(
     return reading
 
 
-def is_target(address: str, model: str | None, configured_address: str | None = None) -> bool:
-    configured = (configured_address or DEFAULT_CONFIG["address"]).upper()
-    if address.upper() == configured:
+def is_target(address: str, configured_address: str | None = None) -> bool:
+    configured = str(configured_address or "").strip().upper()
+    if not configured:
         return True
-    return model == "Meter Plus"
+    return address.upper() == configured
 
 
 def _parse_last_seen(reading: dict[str, Any]) -> datetime | None:
@@ -202,12 +220,15 @@ class RoomSensor:
         decoded = decode_advertisement(address, rssi, service_data, manufacturer_data)
         if decoded is None:
             return None
-        if not is_target(address, decoded.get("model"), self.config["address"]):
+        if not is_target(address, self.config.get("address")):
             return None
         return decoded
 
     async def update(self, reading: dict[str, Any]) -> None:
         async with self._lock:
+            if not str(self.config.get("address") or "").strip():
+                self.config["address"] = reading["address"]
+                save_config(self.config)
             self.reading = reading
             self._last_packet_monotonic = asyncio.get_running_loop().time()
             atomic_write_json(STATE_PATH, reading)

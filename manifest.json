@@ -2,10 +2,10 @@
   "schemaVersion": 1,
   "id": "novique.room",
   "name": "Room",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "author": "Novique",
   "license": "MIT",
-  "description": "Indoor temperature and humidity from a local SwitchBot Meter Plus, as a compact Omarchy bar pill.",
+  "description": "Indoor temperature and humidity from a local SwitchBot BLE meter.",
   "kinds": [
     "service",
     "bar-widget"
@@ -16,20 +16,23 @@
   },
   "barWidget": {
     "displayName": "Room",
-    "description": "Show indoor temperature and humidity from the local room sensor.",
+    "description": "Show indoor temperature and humidity from a local SwitchBot meter.",
     "category": "Info",
     "aliases": [
       "room",
       "temperature",
       "humidity",
       "meter",
-      "switchbot"
+      "switchbot",
+      "ble"
     ],
     "allowMultiple": false,
     "defaultSection": "center",
     "defaults": {
       "unit": "F",
-      "staleSeconds": 120
+      "staleSeconds": 120,
+      "label": "",
+      "showHumidity": true
     },
     "schema": [
       {
@@ -49,6 +52,20 @@
         "step": 30,
         "defaultValue": 120,
         "description": "Dim the pill when the local room-sensor service has not published a new reading in this long."
+      },
+      {
+        "key": "label",
+        "type": "string",
+        "label": "Room name",
+        "defaultValue": "",
+        "description": "Title in the details panel. Leave blank to use the meter model."
+      },
+      {
+        "key": "showHumidity",
+        "type": "boolean",
+        "label": "Show humidity on the pill",
+        "defaultValue": true,
+        "description": "Include relative humidity next to the temperature on the bar."
       }
     ]
   }

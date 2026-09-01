@@ -245,5 +245,38 @@ class FormatTests(unittest.TestCase):
         self.assertEqual(payload["reader_state"], "ok")
 
 
+class DiscoverBindTests(unittest.TestCase):
+    def test_discover_table(self):
+        text = rs.format_discover_table(
+            [
+                {
+                    "address": CAPTURED_ADDR,
+                    "model": "Meter Plus",
+                    "temperature_f": 73.9,
+                    "humidity": 47,
+                    "rssi": -65,
+                }
+            ]
+        )
+        self.assertIn(CAPTURED_ADDR, text)
+        self.assertIn("Meter Plus", text)
+        self.assertIn("73.9", text)
+        self.assertIn("47%", text)
+
+    def test_discover_table_empty(self):
+        self.assertIn("no SwitchBot", rs.format_discover_table([]))
+
+    def test_bind_address_writes_config(self):
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "config.json"
+            cfg = rs.bind_address(OTHER_ADDR, path=path)
+            self.assertEqual(cfg["address"], OTHER_ADDR)
+            saved = json.loads(path.read_text())
+            self.assertEqual(saved["address"], OTHER_ADDR)
+
+
 if __name__ == "__main__":
     unittest.main()

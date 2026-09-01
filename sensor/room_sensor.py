@@ -61,6 +61,31 @@ def save_config(cfg: dict[str, Any]) -> None:
     )
 
 
+def bind_address(address: str, path: Path | None = None) -> dict[str, Any]:
+    cfg = dict(DEFAULT_CONFIG)
+    target = path or CONFIG_PATH
+    if target.exists():
+        cfg.update(json.loads(target.read_text()))
+    cfg["address"] = str(address).strip().upper()
+    if path is None:
+        save_config(cfg)
+        return cfg
+    atomic_write_json(
+        target,
+        {
+            "address": cfg["address"],
+            "listen": cfg.get("listen", DEFAULT_CONFIG["listen"]),
+            "port": int(cfg.get("port", DEFAULT_CONFIG["port"])),
+            "stale_seconds": int(cfg.get("stale_seconds", DEFAULT_CONFIG["stale_seconds"])),
+            "scanner_restart_seconds": int(
+                cfg.get("scanner_restart_seconds", DEFAULT_CONFIG["scanner_restart_seconds"])
+            ),
+            "http": bool(cfg.get("http", False)),
+        },
+    )
+    return cfg
+
+
 def now_local() -> datetime:
     return datetime.now().astimezone()
 
@@ -198,6 +223,24 @@ def format_status_json(reading: dict[str, Any], now: datetime | None = None, sta
     return body
 
 
+def format_discover_table(readings: list[dict[str, Any]]) -> str:
+    if not readings:
+        return "no SwitchBot T/H meters found\n"
+    header = f"{'ADDRESS':<17}  {'MODEL':<22}  {'TEMP':<7}  {'HUM':<4}  {'RSSI'}"
+    lines = [header]
+    for reading in readings:
+        temp = reading.get("temperature_f")
+        temp_s = f"{temp:.1f}°F" if isinstance(temp, (int, float)) else "—"
+        hum = reading.get("humidity")
+        hum_s = f"{hum}%" if hum is not None else "—"
+        rssi = reading.get("rssi")
+        rssi_s = str(rssi) if rssi is not None else "—"
+        lines.append(
+            f"{reading.get('address', ''):<17}  {str(reading.get('model') or ''):<22}  {temp_s:<7}  {hum_s:<4}  {rssi_s}"
+        )
+    return "\n".join(lines) + "\n"
+
+
 def atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(prefix="status.", suffix=".json", dir=str(path.parent))
@@ -278,7 +321,7 @@ async def run_scanner(sensor: RoomSensor, stop: asyncio.Event) -> None:
         scanner = BleakScanner(callback)
         try:
             await scanner.start()
-            print("scanning for Meter Plus advertisements", flush=True)
+            print("scanning for SwitchBot T/H advertisements", flush=True)
             while not stop.is_set():
                 await asyncio.sleep(1)
                 loop_time = asyncio.get_running_loop().time()
@@ -368,7 +411,7 @@ async def scan_once(timeout: float = 20.0) -> int:
         try:
             await asyncio.wait_for(got.wait(), timeout=timeout)
         except TimeoutError:
-            print("no Meter Plus advertisement in time", file=sys.stderr)
+            print("no SwitchBot T/H advertisement in time", file=sys.stderr)
             return 1
     finally:
         await scanner.stop()
@@ -376,14 +419,46 @@ async def scan_once(timeout: float = 20.0) -> int:
     return 0
 
 
+async def run_discover(timeout: float = 20.0) -> int:
+    found: dict[str, dict[str, Any]] = {}
+
+    def callback(device, adv) -> None:
+        reading = decode_advertisement(
+            device.address,
+            adv.rssi,
+            adv.service_data or {},
+            adv.manufacturer_data or {},
+        )
+        if reading is None:
+            return
+        found[reading["address"]] = reading
+
+    scanner = BleakScanner(callback)
+    await scanner.start()
+    try:
+        await asyncio.sleep(timeout)
+    finally:
+        await scanner.stop()
+    sys.stdout.write(format_discover_table(list(found.values())))
+    return 0 if found else 1
+
+
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="SwitchBot Meter Plus room sensor")
+    parser = argparse.ArgumentParser(description="SwitchBot T/H room sensor")
     parser.add_argument("--print", action="store_true", help="print last reading and exit")
     parser.add_argument("--once", action="store_true", help="scan until one reading, then print")
+    parser.add_argument("--discover", action="store_true", help="list nearby SwitchBot T/H meters")
+    parser.add_argument("--bind", metavar="MAC", help="bind this meter MAC and write config")
     parser.add_argument("--timeout", type=float, default=20.0)
     args = parser.parse_args(argv)
     if args.print:
         return print_cli()
+    if args.bind:
+        cfg = bind_address(args.bind)
+        print(f"bound {cfg['address']}")
+        return 0
+    if args.discover:
+        return asyncio.run(run_discover(args.timeout))
     if args.once:
         return asyncio.run(scan_once(args.timeout))
     asyncio.run(run_daemon())

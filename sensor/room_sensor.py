@@ -229,6 +229,8 @@ class RoomSensor:
             if not str(self.config.get("address") or "").strip():
                 self.config["address"] = reading["address"]
                 save_config(self.config)
+            if not is_target(reading["address"], self.config.get("address")):
+                return
             self.reading = reading
             self._last_packet_monotonic = asyncio.get_running_loop().time()
             atomic_write_json(STATE_PATH, reading)

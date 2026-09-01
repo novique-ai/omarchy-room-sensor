@@ -2,8 +2,12 @@
 """Unit tests against captured and constructed SwitchBot T/H advertisements."""
 from __future__ import annotations
 
+import json
+import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from unittest.mock import patch
 
 import room_sensor as rs
 
@@ -81,6 +85,86 @@ class TargetTests(unittest.TestCase):
         self.assertTrue(rs.is_target(CAPTURED_ADDR, ""))
         self.assertTrue(rs.is_target(OTHER_ADDR, None))
         self.assertTrue(rs.is_target(OTHER_ADDR, "  "))
+
+
+class BindTests(unittest.IsolatedAsyncioTestCase):
+    """consider/update bind behaviour must never write the live config/state files."""
+
+    LIVE_CONFIG = Path.home() / ".config/room-sensor/config.json"
+    LIVE_STATE = Path.home() / ".local/state/room-sensor/status.json"
+
+    def setUp(self):
+        self._live_snapshots = {
+            path: path.read_bytes() if path.exists() else None
+            for path in (self.LIVE_CONFIG, self.LIVE_STATE)
+        }
+        self._tmpdir = tempfile.TemporaryDirectory()
+        tmp = Path(self._tmpdir.name)
+        self.config_path = tmp / "config.json"
+        self.state_path = tmp / "status.json"
+        self._config_patcher = patch.object(rs, "CONFIG_PATH", self.config_path)
+        self._state_patcher = patch.object(rs, "STATE_PATH", self.state_path)
+        self._config_patcher.start()
+        self._state_patcher.start()
+
+    def tearDown(self):
+        self._state_patcher.stop()
+        self._config_patcher.stop()
+        self._tmpdir.cleanup()
+        live_config = self.LIVE_CONFIG.read_bytes() if self.LIVE_CONFIG.exists() else None
+        self.assertEqual(
+            live_config,
+            self._live_snapshots[self.LIVE_CONFIG],
+            "tests must not write ~/.config/room-sensor/config.json",
+        )
+        if self.LIVE_STATE.exists():
+            payload = json.loads(self.LIVE_STATE.read_text())
+            self.assertNotEqual(
+                payload.get("address"),
+                OTHER_ADDR,
+                "tests must not write a second MAC to ~/.local/state/room-sensor/status.json",
+            )
+
+    def test_consider_drops_second_plus_when_bound(self):
+        sensor = rs.RoomSensor({"address": CAPTURED_ADDR})
+        other = sensor.consider(
+            OTHER_ADDR,
+            -65,
+            {FD3D: bytes.fromhex(CAPTURED_SERVICE)},
+            {0x0969: bytes.fromhex(CAPTURED_MFR)},
+        )
+        self.assertIsNone(other)
+        self.assertFalse(self.config_path.exists())
+        self.assertFalse(self.state_path.exists())
+
+    def test_consider_accepts_captured_addr_when_configured(self):
+        sensor = rs.RoomSensor({"address": CAPTURED_ADDR})
+        reading = sensor.consider(
+            CAPTURED_ADDR,
+            -65,
+            {FD3D: bytes.fromhex(CAPTURED_SERVICE)},
+            {0x0969: bytes.fromhex(CAPTURED_MFR)},
+        )
+        self.assertIsNotNone(reading)
+        self.assertEqual(reading["address"], CAPTURED_ADDR)
+        self.assertEqual(reading["model"], "Meter Plus")
+        self.assertFalse(self.config_path.exists())
+        self.assertFalse(self.state_path.exists())
+
+    async def test_update_binds_first_then_rejects_second_address(self):
+        sensor = rs.RoomSensor({"address": ""})
+        first = decode(CAPTURED_SERVICE, CAPTURED_MFR, address=CAPTURED_ADDR)
+        second = decode(CAPTURED_SERVICE, CAPTURED_MFR, address=OTHER_ADDR)
+        await sensor.update(first)
+        await sensor.update(second)
+        payload = json.loads(self.state_path.read_text())
+        self.assertEqual(payload["address"], CAPTURED_ADDR)
+        self.assertEqual(sensor.config["address"], CAPTURED_ADDR)
+        self.assertEqual(sensor.reading["address"], CAPTURED_ADDR)
+        saved = json.loads(self.config_path.read_text())
+        self.assertEqual(saved["address"], CAPTURED_ADDR)
+        self.assertNotEqual(self.config_path, self.LIVE_CONFIG)
+        self.assertNotEqual(self.state_path, self.LIVE_STATE)
 
 
 class FormatTests(unittest.TestCase):

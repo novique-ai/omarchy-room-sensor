@@ -161,10 +161,19 @@ def format_cli(reading: dict[str, Any], now: datetime | None = None, stale_secon
     lines = [
         f"Temperature: {reading['temperature_f']:.1f}°F / {reading['temperature_c']:.1f}°C",
         f"Humidity:    {reading['humidity']}%",
-        f"Battery:     {reading['battery']}%",
-        f"RSSI:        {reading['rssi']} dBm",
-        f"Last seen:   {reading['last_seen']}",
     ]
+    if reading.get("co2") is not None:
+        lines.append(f"CO2:         {reading['co2']} ppm")
+    if reading.get("battery") is not None:
+        lines.append(f"Battery:     {reading['battery']}%")
+    if reading.get("rssi") is not None:
+        lines.append(f"RSSI:        {reading['rssi']} dBm")
+    if reading.get("model"):
+        lines.append(f"Model:       {reading['model']}")
+    if reading.get("address"):
+        lines.append(f"Address:     {reading['address']}")
+    if reading.get("last_seen"):
+        lines.append(f"Last seen:   {reading['last_seen']}")
     if stale:
         lines.append("Status:      STALE")
     return "\n".join(lines) + "\n"
@@ -172,16 +181,21 @@ def format_cli(reading: dict[str, Any], now: datetime | None = None, stale_secon
 
 def format_status_json(reading: dict[str, Any], now: datetime | None = None, stale_seconds: int = 120) -> dict[str, Any]:
     now = now or now_local()
-    return {
-        "temperature_f": reading["temperature_f"],
-        "temperature_c": reading["temperature_c"],
-        "humidity": reading["humidity"],
-        "battery": reading["battery"],
-        "rssi": reading["rssi"],
-        "last_seen": reading["last_seen"],
+    body: dict[str, Any] = {
+        "temperature_f": reading.get("temperature_f"),
+        "temperature_c": reading.get("temperature_c"),
+        "humidity": reading.get("humidity"),
+        "battery": reading.get("battery"),
+        "rssi": reading.get("rssi"),
+        "last_seen": reading.get("last_seen"),
         "stale": is_stale(reading, now, stale_seconds),
         "address": reading.get("address"),
+        "model": reading.get("model"),
+        "reader_state": reading.get("reader_state") or "ok",
     }
+    if reading.get("co2") is not None:
+        body["co2"] = reading["co2"]
+    return body
 
 
 def atomic_write_json(path: Path, payload: dict[str, Any]) -> None:

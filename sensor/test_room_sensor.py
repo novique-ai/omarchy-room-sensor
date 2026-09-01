@@ -208,6 +208,42 @@ class FormatTests(unittest.TestCase):
         self.assertTrue(rs.format_status_json(reading, now=later, stale_seconds=120)["stale"])
         self.assertIn("STALE", rs.format_cli(reading, now=later, stale_seconds=120))
 
+    def test_cli_skips_missing_battery_rssi(self):
+        last_seen = datetime(2026, 8, 31, 19, 54, 15, tzinfo=timezone(timedelta(hours=-5)))
+        reading = {
+            "address": CAPTURED_ADDR,
+            "model": "Indoor/Outdoor Meter",
+            "temperature_c": 23.3,
+            "temperature_f": 73.9,
+            "humidity": 47,
+            "battery": None,
+            "rssi": None,
+            "last_seen": last_seen.isoformat(),
+        }
+        text = rs.format_cli(reading, now=last_seen, stale_seconds=120)
+        self.assertIn("Temperature: 73.9°F / 23.3°C", text)
+        self.assertNotIn("Battery:", text)
+        self.assertNotIn("RSSI:", text)
+
+    def test_status_json_includes_model_and_co2(self):
+        last_seen = datetime(2026, 8, 31, 19, 54, 15, tzinfo=timezone(timedelta(hours=-5)))
+        reading = {
+            "address": CAPTURED_ADDR,
+            "model": "Meter Pro CO2",
+            "temperature_c": 23.3,
+            "temperature_f": 73.9,
+            "humidity": 47,
+            "battery": 80,
+            "rssi": -70,
+            "co2": 842,
+            "last_seen": last_seen.isoformat(),
+            "reader_state": "ok",
+        }
+        payload = rs.format_status_json(reading, now=last_seen, stale_seconds=120)
+        self.assertEqual(payload["model"], "Meter Pro CO2")
+        self.assertEqual(payload["co2"], 842)
+        self.assertEqual(payload["reader_state"], "ok")
+
 
 if __name__ == "__main__":
     unittest.main()

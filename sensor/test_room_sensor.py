@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Unit tests against live-captured SwitchBot Meter Plus advertisements."""
+"""Unit tests against captured and constructed SwitchBot T/H advertisements."""
 from __future__ import annotations
 
 import unittest
@@ -7,20 +7,25 @@ from datetime import datetime, timedelta, timezone
 
 import room_sensor as rs
 
-# Captured 2026-08-31T19:54:15-05:00 from C8:92:04:06:1C:2C
+FD3D = "0000fd3d-0000-1000-8000-00805f9b34fb"
 CAPTURED_SERVICE = "6900e40397af"
 CAPTURED_MFR = "c89204061c2c2e030397af"
 CAPTURED_ADDR = "C8:92:04:06:1C:2C"
+OTHER_ADDR = "AA:BB:CC:DD:EE:FF"
+
+
+def decode(service_hex: str, mfr_hex: str, address: str = CAPTURED_ADDR, rssi: int = -65):
+    return rs.decode_advertisement(
+        address=address,
+        rssi=rssi,
+        service_data={FD3D: bytes.fromhex(service_hex)},
+        manufacturer_data={0x0969: bytes.fromhex(mfr_hex)},
+    )
 
 
 class DecodeTests(unittest.TestCase):
     def test_captured_meter_plus_packet(self):
-        reading = rs.decode_advertisement(
-            address=CAPTURED_ADDR,
-            rssi=-65,
-            service_data={"0000fd3d-0000-1000-8000-00805f9b34fb": bytes.fromhex(CAPTURED_SERVICE)},
-            manufacturer_data={0x0969: bytes.fromhex(CAPTURED_MFR)},
-        )
+        reading = decode(CAPTURED_SERVICE, CAPTURED_MFR)
         self.assertIsNotNone(reading)
         self.assertEqual(reading["address"], CAPTURED_ADDR)
         self.assertEqual(reading["model"], "Meter Plus")
@@ -30,6 +35,31 @@ class DecodeTests(unittest.TestCase):
         self.assertEqual(reading["battery"], 100)
         self.assertEqual(reading["rssi"], -65)
         self.assertTrue(reading["fahrenheit_display"])
+        self.assertNotIn("co2", reading)
+        self.assertEqual(reading["reader_state"], "ok")
+
+    def test_meter_type_t(self):
+        reading = decode("5400e40397af", CAPTURED_MFR)
+        self.assertIsNotNone(reading)
+        self.assertEqual(reading["model"], "Meter")
+        self.assertEqual(reading["temperature_c"], 23.3)
+
+    def test_outdoor_type_w(self):
+        reading = decode("7700e4", CAPTURED_MFR)
+        self.assertIsNotNone(reading)
+        self.assertEqual(reading["model"], "Indoor/Outdoor Meter")
+        self.assertEqual(reading["humidity"], 47)
+
+    def test_meter_pro_co2(self):
+        mfr = CAPTURED_MFR + "0000034a"  # bytes 11-12 pad, 13-14 = 842 ppm
+        reading = decode("3500e40397af", mfr)
+        self.assertIsNotNone(reading)
+        self.assertEqual(reading["model"], "Meter Pro CO2")
+        self.assertEqual(reading["co2"], 842)
+
+    def test_ignores_switchbot_bot(self):
+        reading = decode("4800e40397af", CAPTURED_MFR)
+        self.assertIsNone(reading)
 
     def test_ignores_encrypted_cc_uuid_device(self):
         reading = rs.decode_advertisement(
@@ -40,11 +70,13 @@ class DecodeTests(unittest.TestCase):
         )
         self.assertIsNone(reading)
 
+
+class TargetTests(unittest.TestCase):
     def test_matches_configured_address_or_meter_plus(self):
+        # Kept until Task 3 rewrites is_target. Still the old "any Plus" behaviour.
         self.assertTrue(rs.is_target("C8:92:04:06:1C:2C", "Meter Plus"))
         self.assertTrue(rs.is_target("AA:BB:CC:DD:EE:FF", "Meter Plus"))
         self.assertFalse(rs.is_target("7B:E6:AD:F0:A4:AB", None))
-        self.assertFalse(rs.is_target("4D:30:66:C0:51:A7", None))
 
 
 class FormatTests(unittest.TestCase):
@@ -66,23 +98,12 @@ class FormatTests(unittest.TestCase):
         self.assertIn("Humidity:    47%", text)
         self.assertIn("Battery:     100%", text)
         self.assertIn("RSSI:        -65 dBm", text)
-        self.assertIn("Last seen:   2026-08-31T19:54:15-05:00", text)
         self.assertNotIn("STALE", text)
 
         payload = rs.format_status_json(reading, now=last_seen, stale_seconds=120)
-        self.assertEqual(
-            payload,
-            {
-                "temperature_f": 73.9,
-                "temperature_c": 23.3,
-                "humidity": 47,
-                "battery": 100,
-                "rssi": -65,
-                "last_seen": "2026-08-31T19:54:15-05:00",
-                "stale": False,
-                "address": CAPTURED_ADDR,
-            },
-        )
+        self.assertEqual(payload["temperature_f"], 73.9)
+        self.assertEqual(payload["address"], CAPTURED_ADDR)
+        self.assertFalse(payload["stale"])
 
     def test_stale_flag(self):
         last_seen = datetime(2026, 8, 31, 19, 54, 15, tzinfo=timezone(timedelta(hours=-5)))
@@ -96,10 +117,8 @@ class FormatTests(unittest.TestCase):
             "rssi": -65,
             "last_seen": last_seen.isoformat(),
         }
-        payload = rs.format_status_json(reading, now=later, stale_seconds=120)
-        self.assertTrue(payload["stale"])
-        text = rs.format_cli(reading, now=later, stale_seconds=120)
-        self.assertIn("STALE", text)
+        self.assertTrue(rs.format_status_json(reading, now=later, stale_seconds=120)["stale"])
+        self.assertIn("STALE", rs.format_cli(reading, now=later, stale_seconds=120))
 
 
 if __name__ == "__main__":

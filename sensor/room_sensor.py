@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from bleak import BleakScanner
-from switchbot.adv_parsers.meter import process_wosensorth
+from switchbot.adv_parsers.meter import process_wosensorth, process_wosensorth_c
 
 HOME = Path.home()
 CONFIG_PATH = HOME / ".config/room-sensor/config.json"
@@ -51,13 +51,27 @@ def round_temp(value: float) -> float:
     return round(float(value) * 10) / 10
 
 
+TH_TYPES: dict[int, tuple[str, bool]] = {
+    0x54: ("Meter", False),
+    0x74: ("Meter", False),
+    0x69: ("Meter Plus", False),
+    0x49: ("Meter Plus", False),
+    0x77: ("Indoor/Outdoor Meter", False),
+    0x57: ("Indoor/Outdoor Meter", False),
+    0x34: ("Meter Pro", False),
+    0x14: ("Meter Pro", False),
+    0x35: ("Meter Pro CO2", True),
+    0x15: ("Meter Pro CO2", True),
+}
+
+
 def decode_advertisement(
     address: str,
     rssi: int | None,
     service_data: dict[str, bytes],
     manufacturer_data: dict[int, bytes],
 ) -> dict[str, Any] | None:
-    """Decode a Meter Plus advertisement. Returns None if it is not one."""
+    """Decode a SwitchBot T/H advertisement. Returns None if it is not one."""
     sd = None
     for uuid, data in service_data.items():
         if uuid.lower().endswith("fd3d") or uuid.lower().endswith("0d00"):
@@ -68,34 +82,38 @@ def decode_advertisement(
 
     mfr = manufacturer_data.get(SWITCHBOT_COMPANY_ID)
     if mfr is None:
-        for cid, data in manufacturer_data.items():
-            if cid == 2409:
-                mfr = data
-                break
+        mfr = manufacturer_data.get(2409)
 
     if not sd and not mfr:
         return None
-    # Meter Plus device type is 0x69 ('i'). Ignore other SwitchBot ads.
-    if sd and chr(sd[0] & 0b01111111) not in ("i", "I"):
-        return None
 
-    parsed = process_wosensorth(sd, mfr)
+    model = "Meter"
+    has_co2 = False
+    if sd:
+        mapped = TH_TYPES.get(sd[0] & 0b01111111)
+        if mapped is None:
+            return None
+        model, has_co2 = mapped
+
+    parsed = process_wosensorth_c(sd, mfr) if has_co2 else process_wosensorth(sd, mfr)
     if not parsed:
         return None
 
-    temp_c = round_temp(parsed["temperature"])
-    temp_f = round_temp(parsed["temp"]["f"])
-    return {
+    reading = {
         "address": address.upper(),
-        "model": "Meter Plus",
-        "temperature_c": temp_c,
-        "temperature_f": temp_f,
+        "model": model,
+        "temperature_c": round_temp(parsed["temperature"]),
+        "temperature_f": round_temp(parsed["temp"]["f"]),
         "humidity": int(parsed["humidity"]),
         "battery": int(parsed["battery"]) if parsed.get("battery") is not None else None,
         "rssi": int(rssi) if rssi is not None else None,
         "fahrenheit_display": bool(parsed.get("fahrenheit")),
         "last_seen": now_local().isoformat(timespec="seconds"),
+        "reader_state": "ok",
     }
+    if parsed.get("co2") is not None:
+        reading["co2"] = int(parsed["co2"])
+    return reading
 
 
 def is_target(address: str, model: str | None, configured_address: str | None = None) -> bool:

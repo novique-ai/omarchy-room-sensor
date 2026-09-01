@@ -16,9 +16,15 @@ from typing import Any
 from bleak import BleakScanner
 from switchbot.adv_parsers.meter import process_wosensorth, process_wosensorth_c
 
-HOME = Path.home()
-CONFIG_PATH = HOME / ".config/room-sensor/config.json"
-STATE_PATH = HOME / ".local/state/room-sensor/status.json"
+def _xdg_dir(env_name: str, fallback: str) -> Path:
+    value = os.environ.get(env_name) or ""
+    if value:
+        return Path(value).expanduser()
+    return Path.home() / fallback
+
+
+CONFIG_PATH = _xdg_dir("XDG_CONFIG_HOME", ".config") / "room-sensor" / "config.json"
+STATE_PATH = _xdg_dir("XDG_STATE_HOME", ".local/state") / "room-sensor" / "status.json"
 
 DEFAULT_CONFIG = {
     "address": "",

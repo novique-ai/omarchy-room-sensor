@@ -133,3 +133,20 @@ test("lowBattery at 15 percent", () => {
   const ok = Model.parseStatus(SAMPLE, NOW, 120)
   assert.equal(Model.lowBattery(ok), false)
 })
+
+test("null co2 battery rssi stay null", () => {
+  const reading = Model.parseStatus(JSON.stringify({
+    temperature_f: 73.4,
+    temperature_c: 23.0,
+    humidity: 47,
+    battery: null,
+    rssi: null,
+    co2: null,
+    last_seen: "2026-08-31T19:58:29-05:00"
+  }), NOW, 120)
+  assert.equal(reading.available, true)
+  assert.equal(reading.co2, null)
+  assert.equal(reading.battery, null)
+  assert.equal(reading.rssi, null)
+  assert.equal(Model.lowBattery(reading), false)
+})

@@ -94,4 +94,5 @@ fi
 
 systemctl --user daemon-reload
 systemctl --user enable --now room-sensor.service
+systemctl --user try-restart room-sensor.service
 printf '%s\n' "room-sensor.service is running. CLI: room-temp"

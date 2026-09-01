@@ -48,6 +48,12 @@ function parseStatus(text, nowMs, staleSeconds) {
   reading.reader_state = raw.reader_state ? String(raw.reader_state) : ""
   reading.address = raw.address ? String(raw.address) : ""
 
+  function optionalInt(value) {
+    if (value === null || value === undefined || value === "") return null
+    var n = Number(value)
+    return isFinite(n) ? Math.round(n) : null
+  }
+
   var tf = Number(raw.temperature_f)
   var tc = Number(raw.temperature_c)
   var hum = Number(raw.humidity)
@@ -56,9 +62,9 @@ function parseStatus(text, nowMs, staleSeconds) {
   reading.temperature_f = Math.round(tf * 10) / 10
   reading.temperature_c = Math.round(tc * 10) / 10
   reading.humidity = Math.round(hum)
-  reading.battery = isFinite(Number(raw.battery)) ? Math.round(Number(raw.battery)) : null
-  reading.rssi = isFinite(Number(raw.rssi)) ? Math.round(Number(raw.rssi)) : null
-  reading.co2 = isFinite(Number(raw.co2)) ? Math.round(Number(raw.co2)) : null
+  reading.battery = optionalInt(raw.battery)
+  reading.rssi = optionalInt(raw.rssi)
+  reading.co2 = optionalInt(raw.co2)
   reading.last_seen = raw.last_seen ? String(raw.last_seen) : null
   reading.available = true
   reading.stale = isStale(reading, nowMs, staleSeconds)

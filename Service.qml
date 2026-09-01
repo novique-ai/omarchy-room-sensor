@@ -60,19 +60,24 @@ Item {
 
   function tick() {
     nowMs = Date.now()
-    if (reading && reading.available)
-      reading = Model.parseStatus(JSON.stringify({
+    if (reading && reading.available) {
+      var payload = {
         temperature_f: reading.temperature_f,
         temperature_c: reading.temperature_c,
         humidity: reading.humidity,
-        battery: reading.battery,
-        rssi: reading.rssi,
-        co2: reading.co2,
         last_seen: reading.last_seen,
         address: reading.address,
         model: reading.model,
         reader_state: reading.reader_state
-      }), nowMs, staleSeconds)
+      }
+      if (reading.battery !== null && reading.battery !== undefined)
+        payload.battery = reading.battery
+      if (reading.rssi !== null && reading.rssi !== undefined)
+        payload.rssi = reading.rssi
+      if (reading.co2 !== null && reading.co2 !== undefined)
+        payload.co2 = reading.co2
+      reading = Model.parseStatus(JSON.stringify(payload), nowMs, staleSeconds)
+    }
   }
 
   FileView {

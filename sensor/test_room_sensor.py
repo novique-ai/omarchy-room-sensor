@@ -278,5 +278,11 @@ class DiscoverBindTests(unittest.TestCase):
             self.assertEqual(saved["address"], OTHER_ADDR)
 
 
+class ConfigTests(unittest.TestCase):
+    def test_default_address_is_empty_and_http_off(self):
+        self.assertEqual(rs.DEFAULT_CONFIG["address"], "")
+        self.assertFalse(rs.DEFAULT_CONFIG.get("http", False))
+
+
 if __name__ == "__main__":
     unittest.main()

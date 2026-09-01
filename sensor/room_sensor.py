@@ -21,14 +21,12 @@ CONFIG_PATH = HOME / ".config/room-sensor/config.json"
 STATE_PATH = HOME / ".local/state/room-sensor/status.json"
 
 DEFAULT_CONFIG = {
-    # Live capture 2026-08-31: this is the Meter Plus (type 0x69, UUID 0xfd3d).
-    # 4D:30:66:C0:51:A7 / 7B:E6:AD:F0:A4:AB (name 866f8f94) is a different
-    # rotating-address device with UUID 000000cc and no environmental payload.
-    "address": "C8:92:04:06:1C:2C",
+    "address": "",
     "listen": "127.0.0.1",
     "port": 18787,
     "stale_seconds": 120,
     "scanner_restart_seconds": 90,
+    "http": False,
 }
 
 FD3D = "0000fd3d-0000-1000-8000-00805f9b34fb"
@@ -299,6 +297,14 @@ class RoomSensor:
         return body, 200
 
 
+def write_reader_state(sensor: RoomSensor, state: str) -> None:
+    payload = dict(sensor.reading or {})
+    payload["reader_state"] = state
+    if sensor.reading:
+        sensor.reading = payload
+    atomic_write_json(STATE_PATH, payload)
+
+
 async def run_scanner(sensor: RoomSensor, stop: asyncio.Event) -> None:
     restart_after = float(sensor.config["scanner_restart_seconds"])
 
@@ -332,6 +338,9 @@ async def run_scanner(sensor: RoomSensor, stop: asyncio.Event) -> None:
             raise
         except Exception as exc:
             print(f"scanner error: {exc}", file=sys.stderr)
+            err = str(exc).lower()
+            if "adapter" in err or "bluetooth" in err:
+                write_reader_state(sensor, "no_adapter")
         finally:
             try:
                 await scanner.stop()
@@ -342,7 +351,12 @@ async def run_scanner(sensor: RoomSensor, stop: asyncio.Event) -> None:
 
 
 async def run_http(sensor: RoomSensor, stop: asyncio.Event) -> None:
-    from aiohttp import web
+    try:
+        from aiohttp import web
+    except ImportError:
+        print("http enabled but aiohttp is not installed; skipping status server", file=sys.stderr)
+        await stop.wait()
+        return
 
     async def status(_request: web.Request) -> web.Response:
         body, code = sensor.status_payload()
@@ -366,13 +380,18 @@ async def run_daemon() -> None:
     config = load_config()
     CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
     if not CONFIG_PATH.exists():
-        CONFIG_PATH.write_text(json.dumps(config, indent=2) + "\n")
+        save_config(config)
     sensor = RoomSensor(config)
+    if not str(config.get("address") or "").strip() and not sensor.reading:
+        write_reader_state(sensor, "unbound")
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, stop.set)
-    await asyncio.gather(run_scanner(sensor, stop), run_http(sensor, stop))
+    tasks = [run_scanner(sensor, stop)]
+    if config.get("http"):
+        tasks.append(run_http(sensor, stop))
+    await asyncio.gather(*tasks)
 
 
 def print_cli() -> int:

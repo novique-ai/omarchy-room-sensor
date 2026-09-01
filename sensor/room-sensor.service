@@ -1,0 +1,15 @@
+[Unit]
+Description=SwitchBot T/H room sensor (BLE advertisements)
+After=bluetooth.service
+Wants=bluetooth.service
+
+[Service]
+Type=simple
+ExecStart=%h/.local/share/room-sensor/.venv/bin/python %h/.local/share/room-sensor/room_sensor.py
+Restart=always
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+WorkingDirectory=%h/.local/share/room-sensor
+
+[Install]
+WantedBy=default.target

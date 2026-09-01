@@ -1,0 +1,55 @@
+{
+  "schemaVersion": 1,
+  "id": "novique.room",
+  "name": "Room",
+  "version": "1.0.0",
+  "author": "Novique",
+  "license": "MIT",
+  "description": "Indoor temperature and humidity from a local SwitchBot Meter Plus, as a compact Omarchy bar pill.",
+  "kinds": [
+    "service",
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "service": "Service.qml",
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Room",
+    "description": "Show indoor temperature and humidity from the local room sensor.",
+    "category": "Info",
+    "aliases": [
+      "room",
+      "temperature",
+      "humidity",
+      "meter",
+      "switchbot"
+    ],
+    "allowMultiple": false,
+    "defaultSection": "center",
+    "defaults": {
+      "unit": "F",
+      "staleSeconds": 120
+    },
+    "schema": [
+      {
+        "key": "unit",
+        "type": "enum",
+        "label": "Temperature unit",
+        "options": ["F", "C"],
+        "defaultValue": "F",
+        "description": "Unit shown on the bar pill. The popup always lists both."
+      },
+      {
+        "key": "staleSeconds",
+        "type": "integer",
+        "label": "Stale after (seconds)",
+        "min": 30,
+        "max": 600,
+        "step": 30,
+        "defaultValue": 120,
+        "description": "Dim the pill when the local room-sensor service has not published a new reading in this long."
+      }
+    ]
+  }
+}

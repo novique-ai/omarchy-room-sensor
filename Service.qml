@@ -42,8 +42,16 @@ Item {
     var u = settings && settings.unit ? String(settings.unit) : "F"
     return u.toUpperCase() === "C" ? "C" : "F"
   }
-  readonly property string label: Model.barLabel(reading, unit)
+  readonly property bool showHumidity: {
+    if (!settings || settings.showHumidity === undefined || settings.showHumidity === null)
+      return true
+    return settings.showHumidity !== false && settings.showHumidity !== "false"
+  }
+  readonly property string label: Model.barLabel(reading, unit, showHumidity)
   readonly property string tooltip: Model.tooltip(reading, unit)
+  readonly property string panelTitle: Model.panelTitle(reading, settings && settings.label)
+  readonly property string statusMessage: Model.statusMessage(reading, stale)
+  readonly property bool lowBattery: Model.lowBattery(reading)
 
   function applyText(text) {
     reading = Model.parseStatus(text, nowMs, staleSeconds)
@@ -59,8 +67,11 @@ Item {
         humidity: reading.humidity,
         battery: reading.battery,
         rssi: reading.rssi,
+        co2: reading.co2,
         last_seen: reading.last_seen,
-        address: reading.address
+        address: reading.address,
+        model: reading.model,
+        reader_state: reading.reader_state
       }), nowMs, staleSeconds)
   }
 

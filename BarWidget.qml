@@ -72,16 +72,18 @@ BarWidget {
     bar: root.bar
     text: root.displayText
     dimmed: root.stale
-    tooltipText: ""
+    tooltipText: room && room.tooltip ? room.tooltip : "Room sensor — no reading yet"
     horizontalMargin: 8.75
     verticalPadding: 8.75
     foreground: root.stale ? Color.muted : root.defaultForeground
 
     onPressed: function(b) {
-      if (b === Qt.RightButton && root.bar)
-        root.bar.run("omarchy-notification-send \"$(room-temp 2>/dev/null || echo 'Room sensor unavailable')\"")
-      else
+      if (b === Qt.RightButton && root.bar) {
+        var msg = root.room && root.room.tooltip ? root.room.tooltip : "Room sensor unavailable"
+        root.bar.run("omarchy-notification-send " + JSON.stringify(msg))
+      } else {
         root.togglePanel()
+      }
     }
   }
 }

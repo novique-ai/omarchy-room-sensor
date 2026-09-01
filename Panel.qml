@@ -1,6 +1,7 @@
 import QtQuick
 import qs.Commons
 import qs.Ui
+import "Model.js" as Model
 
 Panel {
   id: root
@@ -71,7 +72,7 @@ Panel {
 
         Text {
           width: parent.width
-          text: "Room"
+          text: room && room.panelTitle ? room.panelTitle : "Room"
           color: Color.foreground
           font.family: Style.font.family
           font.pixelSize: Style.font.body
@@ -93,9 +94,21 @@ Panel {
 
         Text {
           width: parent.width
+          visible: root.available && reading.humidity !== undefined && reading.humidity !== null
           text: root.available && reading.humidity !== undefined && reading.humidity !== null
             ? "Humidity  " + reading.humidity + "%"
-            : "No reading yet"
+            : ""
+          color: Color.foreground
+          font.family: Style.font.family
+          font.pixelSize: Style.font.body
+        }
+
+        Text {
+          width: parent.width
+          visible: root.available && reading.co2 !== undefined && reading.co2 !== null
+          text: root.available && reading.co2 !== undefined && reading.co2 !== null
+            ? "CO₂  " + reading.co2 + " ppm"
+            : ""
           color: Color.foreground
           font.family: Style.font.family
           font.pixelSize: Style.font.body
@@ -114,6 +127,15 @@ Panel {
 
         Text {
           width: parent.width
+          visible: room && room.lowBattery === true
+          text: "Battery low"
+          color: Color.urgent
+          font.family: Style.font.family
+          font.pixelSize: Style.font.caption
+        }
+
+        Text {
+          width: parent.width
           visible: root.available && reading.rssi !== undefined && reading.rssi !== null
           text: root.available && reading.rssi !== undefined && reading.rssi !== null
             ? "RSSI  " + reading.rssi + " dBm"
@@ -126,7 +148,11 @@ Panel {
         Text {
           width: parent.width
           visible: reading.last_seen !== undefined && reading.last_seen !== null && reading.last_seen !== ""
-          text: reading.last_seen ? "Last seen  " + reading.last_seen : ""
+          text: {
+            if (!reading.last_seen) return ""
+            var nowMs = room && room.nowMs ? room.nowMs : Date.now()
+            return "Last seen  " + Model.formatLastSeen(reading.last_seen, nowMs)
+          }
           color: Color.muted
           font.family: Style.font.family
           font.pixelSize: Style.font.caption
@@ -135,8 +161,17 @@ Panel {
 
         Text {
           width: parent.width
-          visible: root.stale
-          text: root.available ? "Stale — waiting for the next advertisement" : "Start room-sensor.service"
+          visible: reading.address !== undefined && reading.address !== null && reading.address !== ""
+          text: reading.address ? reading.address : ""
+          color: Color.muted
+          font.family: Style.font.family
+          font.pixelSize: Style.font.caption
+        }
+
+        Text {
+          width: parent.width
+          visible: room && room.statusMessage && room.statusMessage.length > 0
+          text: room && room.statusMessage ? room.statusMessage : ""
           color: Color.urgent
           font.family: Style.font.family
           font.pixelSize: Style.font.caption

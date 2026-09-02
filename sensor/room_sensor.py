@@ -6,10 +6,11 @@ import argparse
 import asyncio
 import json
 import os
+import re
 import signal
 import sys
 import tempfile
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +26,7 @@ def _xdg_dir(env_name: str, fallback: str) -> Path:
 
 CONFIG_PATH = _xdg_dir("XDG_CONFIG_HOME", ".config") / "room-sensor" / "config.json"
 STATE_PATH = _xdg_dir("XDG_STATE_HOME", ".local/state") / "room-sensor" / "status.json"
+HISTORY_PATH = _xdg_dir("XDG_STATE_HOME", ".local/state") / "room-sensor" / "history.jsonl"
 
 DEFAULT_CONFIG = {
     "address": "",
@@ -33,6 +35,9 @@ DEFAULT_CONFIG = {
     "stale_seconds": 120,
     "scanner_restart_seconds": 90,
     "http": False,
+    "history": True,
+    "history_interval_seconds": 60,
+    "history_retention_hours": 168,
 }
 
 FD3D = "0000fd3d-0000-1000-8000-00805f9b34fb"
@@ -45,6 +50,7 @@ def load_config() -> dict[str, Any]:
         cfg.update(json.loads(CONFIG_PATH.read_text()))
     cfg["address"] = str(cfg.get("address") or "").upper()
     cfg["http"] = bool(cfg.get("http", False))
+    cfg["history"] = bool(cfg.get("history", True))
     return cfg
 
 
@@ -61,6 +67,13 @@ def save_config(cfg: dict[str, Any]) -> None:
                 cfg.get("scanner_restart_seconds", DEFAULT_CONFIG["scanner_restart_seconds"])
             ),
             "http": bool(cfg.get("http", False)),
+            "history": bool(cfg.get("history", True)),
+            "history_interval_seconds": int(
+                cfg.get("history_interval_seconds", DEFAULT_CONFIG["history_interval_seconds"])
+            ),
+            "history_retention_hours": int(
+                cfg.get("history_retention_hours", DEFAULT_CONFIG["history_retention_hours"])
+            ),
         },
     )
 
@@ -85,6 +98,13 @@ def bind_address(address: str, path: Path | None = None) -> dict[str, Any]:
                 cfg.get("scanner_restart_seconds", DEFAULT_CONFIG["scanner_restart_seconds"])
             ),
             "http": bool(cfg.get("http", False)),
+            "history": bool(cfg.get("history", True)),
+            "history_interval_seconds": int(
+                cfg.get("history_interval_seconds", DEFAULT_CONFIG["history_interval_seconds"])
+            ),
+            "history_retention_hours": int(
+                cfg.get("history_retention_hours", DEFAULT_CONFIG["history_retention_hours"])
+            ),
         },
     )
     return cfg
@@ -270,12 +290,359 @@ def read_state() -> dict[str, Any] | None:
         return None
 
 
+HISTORY_FIELDS = ("temperature_c", "temperature_f", "humidity", "battery", "co2")
+HISTORY_PRUNE_EVERY = 500
+SPARK_CHARS = "▁▂▃▄▅▆▇█"
+DURATION_UNITS = {"s": 1, "m": 60, "h": 3600, "d": 86400}
+LABEL_WIDTH = 13
+INDENT = " " * LABEL_WIDTH
+_DURATION_PART = re.compile(r"(\d+(?:\.\d+)?)([smhd])")
+_DURATION_FULL = re.compile(r"(?:\d+(?:\.\d+)?[smhd])+")
+_BARE_NUMBER = re.compile(r"\d+(?:\.\d+)?")
+
+
+def parse_duration(text: str) -> timedelta:
+    """Read 45s / 90m / 2h / 3d / 1h30m. A bare number means minutes."""
+    raw = str(text or "").strip().lower().replace(" ", "")
+    if not raw:
+        raise ValueError("empty duration; try 45s, 90m, 2h, 3d, or 1h30m")
+    if _BARE_NUMBER.fullmatch(raw):
+        seconds = float(raw) * 60
+    elif _DURATION_FULL.fullmatch(raw):
+        seconds = sum(float(v) * DURATION_UNITS[u] for v, u in _DURATION_PART.findall(raw))
+    else:
+        raise ValueError(f"cannot read duration {text!r}; try 45s, 90m, 2h, 3d, or 1h30m")
+    if seconds <= 0:
+        raise ValueError(f"duration {text!r} must be positive")
+    return timedelta(seconds=seconds)
+
+
+def window_label(text: str) -> str:
+    """Echo the user's own --since text, giving a bare number its implied unit."""
+    raw = str(text or "").strip().lower().replace(" ", "")
+    return f"{raw}m" if _BARE_NUMBER.fullmatch(raw) else raw
+
+
+def history_row(reading: dict[str, Any], when: datetime | None = None) -> dict[str, Any]:
+    stamp = reading.get("last_seen") or (when or now_local()).isoformat(timespec="seconds")
+    row: dict[str, Any] = {"time": stamp}
+    for key in HISTORY_FIELDS:
+        value = reading.get(key)
+        if value is not None:
+            row[key] = value
+    return row
+
+
+def row_time(row: Any) -> datetime | None:
+    raw = row.get("time") if isinstance(row, dict) else None
+    if not raw:
+        return None
+    try:
+        stamp = datetime.fromisoformat(str(raw))
+    except ValueError:
+        return None
+    return stamp if stamp.tzinfo else stamp.astimezone()
+
+
+def _numeric(row: dict[str, Any], key: str) -> bool:
+    value = row.get(key)
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def append_history(row: dict[str, Any], path: Path | None = None) -> None:
+    target = path or HISTORY_PATH
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with target.open("a") as f:
+        f.write(json.dumps(row, separators=(",", ":")) + "\n")
+
+
+def read_history(
+    since: timedelta | None = None,
+    path: Path | None = None,
+    now: datetime | None = None,
+) -> list[dict[str, Any]]:
+    """Every recorded row inside the window, oldest first. Junk lines are skipped."""
+    target = path or HISTORY_PATH
+    if not target.exists():
+        return []
+    cutoff = ((now or now_local()) - since) if since is not None else None
+    rows: list[dict[str, Any]] = []
+    with target.open() as f:
+        for line in f:
+            stripped = line.strip()
+            if not stripped:
+                continue
+            try:
+                row = json.loads(stripped)
+            except json.JSONDecodeError:
+                continue
+            stamp = row_time(row)
+            if stamp is None:
+                continue
+            if cutoff is not None and stamp < cutoff:
+                continue
+            rows.append(row)
+    rows.sort(key=row_time)
+    return rows
+
+
+def latest_history_time(path: Path | None = None) -> datetime | None:
+    rows = read_history(path=path)
+    return row_time(rows[-1]) if rows else None
+
+
+def atomic_write_lines(path: Path, lines: list[str]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix="history.", suffix=".jsonl", dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "w") as f:
+            for line in lines:
+                f.write(line + "\n")
+        os.replace(tmp, path)
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def prune_history(
+    retention: timedelta,
+    path: Path | None = None,
+    now: datetime | None = None,
+) -> int:
+    """Drop rows older than the retention window. Returns how many lines went."""
+    target = path or HISTORY_PATH
+    if not target.exists():
+        return 0
+    cutoff = (now or now_local()) - retention
+    kept: list[str] = []
+    dropped = 0
+    with target.open() as f:
+        for line in f:
+            stripped = line.strip()
+            if not stripped:
+                continue
+            try:
+                row = json.loads(stripped)
+            except json.JSONDecodeError:
+                dropped += 1
+                continue
+            stamp = row_time(row)
+            if stamp is None or stamp < cutoff:
+                dropped += 1
+                continue
+            kept.append(stripped)
+    if dropped:
+        atomic_write_lines(target, kept)
+    return dropped
+
+
+def _tidy(value: float) -> float | int:
+    rounded = round(float(value), 1)
+    return int(rounded) if rounded.is_integer() else rounded
+
+
+def _ordered(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return sorted((r for r in rows if row_time(r) is not None), key=row_time)
+
+
+def summarize_history(
+    rows: list[dict[str, Any]],
+    window: timedelta | None = None,
+) -> dict[str, Any] | None:
+    ordered = _ordered(rows)
+    if not ordered:
+        return None
+    summary: dict[str, Any] = {
+        "samples": len(ordered),
+        "first_time": row_time(ordered[0]).isoformat(timespec="seconds"),
+        "last_time": row_time(ordered[-1]).isoformat(timespec="seconds"),
+        "series": {},
+    }
+    if window is not None:
+        summary["window_seconds"] = int(window.total_seconds())
+    for key in HISTORY_FIELDS:
+        values = [r[key] for r in ordered if _numeric(r, key)]
+        if not values:
+            continue
+        summary["series"][key] = {
+            "first": values[0],
+            "last": values[-1],
+            "delta": _tidy(values[-1] - values[0]),
+            "min": _tidy(min(values)),
+            "max": _tidy(max(values)),
+            "avg": _tidy(sum(values) / len(values)),
+            "samples": len(values),
+        }
+    return summary
+
+
+def _resample(values: list[float], width: int) -> list[float]:
+    if len(values) <= width:
+        return [float(v) for v in values]
+    step = len(values) / width
+    out: list[float] = []
+    for i in range(width):
+        low = int(i * step)
+        high = max(low + 1, int((i + 1) * step))
+        chunk = values[low:high]
+        out.append(sum(chunk) / len(chunk))
+    return out
+
+
+def sparkline(values: list[float], width: int = 48) -> str:
+    numbers = [float(v) for v in values]
+    if not numbers:
+        return ""
+    points = _resample(numbers, width)
+    low, high = min(points), max(points)
+    if high - low < 1e-9:
+        return SPARK_CHARS[3] * len(points)
+    span = high - low
+    top = len(SPARK_CHARS) - 1
+    return "".join(SPARK_CHARS[min(top, int((v - low) / span * len(SPARK_CHARS)))] for v in points)
+
+
+def _num(value: Any) -> str:
+    if value is None:
+        return "—"
+    number = float(value)
+    return str(int(number)) if number.is_integer() else f"{number:.1f}"
+
+
+def _delta(value: float, unit: str = "") -> str:
+    number = float(value)
+    if number > 0:
+        return f"+{_num(number)}{unit}"
+    if number < 0:
+        return f"{_num(number)}{unit}"
+    return f"±0{unit}"
+
+
+def _label(text: str) -> str:
+    return f"{text:<{LABEL_WIDTH}}"
+
+
+def _clock(first: datetime, last: datetime) -> str:
+    if first.date() == last.date():
+        return f"{first:%H:%M} → {last:%H:%M}"
+    return f"{first:%b %d %H:%M} → {last:%b %d %H:%M}"
+
+
+def _series_block(name: str, values: list[float], unit: str, width: int) -> list[str]:
+    average = sum(values) / len(values)
+    return [
+        "",
+        f"{_label(name + ':')}{_num(values[0])}{unit} → {_num(values[-1])}{unit}"
+        f"  ({_delta(values[-1] - values[0], unit)})",
+        f"{INDENT}min {_num(min(values))}{unit}  max {_num(max(values))}{unit}"
+        f"  avg {_num(_tidy(average))}{unit}",
+        f"{INDENT}{sparkline(values, width)}",
+    ]
+
+
+def format_history(rows: list[dict[str, Any]], label: str = "", width: int = 48) -> str:
+    ordered = _ordered(rows)
+    if not ordered:
+        return ""
+    first, last = row_time(ordered[0]), row_time(ordered[-1])
+    count = len(ordered)
+    head = f"Last {label}" if label else "History"
+    noun = "sample" if count == 1 else "samples"
+    lines = [f"{head} — {count} {noun}, {_clock(first, last)}"]
+
+    def series(key: str) -> list[float]:
+        return [r[key] for r in ordered if _numeric(r, key)]
+
+    if count < 2:
+        row = ordered[0]
+        lines.append("no earlier reading in this window")
+        lines.append("")
+        if row.get("temperature_f") is not None or row.get("temperature_c") is not None:
+            lines.append(
+                f"{_label('Temperature:')}{_num(row.get('temperature_f'))}°F"
+                f" / {_num(row.get('temperature_c'))}°C"
+            )
+        if row.get("humidity") is not None:
+            lines.append(f"{_label('Humidity:')}{_num(row['humidity'])}%")
+        if row.get("co2") is not None:
+            lines.append(f"{_label('CO2:')}{_num(row['co2'])} ppm")
+        return "\n".join(lines) + "\n"
+
+    temps_f, temps_c = series("temperature_f"), series("temperature_c")
+    if temps_f:
+        block = _series_block("Temperature", temps_f, "°F", width)
+        if temps_c:
+            both = f"{_delta(temps_f[-1] - temps_f[0], '°F')} / {_delta(temps_c[-1] - temps_c[0], '°C')}"
+            block[1] = (
+                f"{_label('Temperature:')}{_num(temps_f[0])}°F → {_num(temps_f[-1])}°F"
+                f"  ({both})"
+            )
+        lines.extend(block)
+
+    humidity = series("humidity")
+    if humidity:
+        lines.extend(_series_block("Humidity", humidity, "%", width))
+
+    co2 = series("co2")
+    if co2:
+        lines.extend(_series_block("CO2", co2, " ppm", width))
+
+    battery = series("battery")
+    if battery and battery[-1] != battery[0]:
+        lines.append("")
+        lines.append(
+            f"{_label('Battery:')}{_num(battery[0])}% → {_num(battery[-1])}%"
+            f"  ({_delta(battery[-1] - battery[0], '%')})"
+        )
+
+    return "\n".join(lines) + "\n"
+
+
+def history_command(
+    since_text: str,
+    as_json: bool = False,
+    path: Path | None = None,
+    config: dict[str, Any] | None = None,
+) -> int:
+    cfg = config if config is not None else load_config()
+    try:
+        window = parse_duration(since_text)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    rows = read_history(since=window, path=path)
+    if not rows:
+        if not cfg.get("history", True):
+            print(
+                f'history recording is off; set "history": true in {CONFIG_PATH}',
+                file=sys.stderr,
+            )
+        else:
+            print(
+                f"no readings recorded in the last {window_label(since_text)}"
+                " (is room-sensor.service running?)",
+                file=sys.stderr,
+            )
+        return 1
+    if as_json:
+        json.dump(summarize_history(rows, window), sys.stdout, indent=2)
+        sys.stdout.write("\n")
+        return 0
+    sys.stdout.write(format_history(rows, label=window_label(since_text)))
+    return 0
+
+
 class RoomSensor:
     def __init__(self, config: dict[str, Any]) -> None:
         self.config = config
         self.reading: dict[str, Any] | None = read_state()
         self._last_packet_monotonic = 0.0
         self._lock = asyncio.Lock()
+        self._history_at = latest_history_time() if config.get("history", True) else None
+        self._history_appends = 0
 
     def consider(self, address: str, rssi: int | None, service_data, manufacturer_data) -> dict[str, Any] | None:
         decoded = decode_advertisement(address, rssi, service_data, manufacturer_data)
@@ -295,12 +662,45 @@ class RoomSensor:
             self.reading = reading
             self._last_packet_monotonic = asyncio.get_running_loop().time()
             atomic_write_json(STATE_PATH, reading)
+            self.record_history(reading)
+
+    def record_history(self, reading: dict[str, Any]) -> bool:
+        """Append one sample, no more often than history_interval_seconds."""
+        if not self.config.get("history", True):
+            return False
+        stamp = row_time({"time": reading.get("last_seen")}) or now_local()
+        interval = timedelta(
+            seconds=int(
+                self.config.get(
+                    "history_interval_seconds", DEFAULT_CONFIG["history_interval_seconds"]
+                )
+            )
+        )
+        if self._history_at is not None:
+            gap = stamp - self._history_at
+            if timedelta(0) <= gap < interval:
+                return False
+        append_history(history_row(reading))
+        self._history_at = stamp
+        self._history_appends += 1
+        if self._history_appends >= HISTORY_PRUNE_EVERY:
+            self._history_appends = 0
+            prune_history(retention_window(self.config))
+        return True
 
     def status_payload(self) -> tuple[dict[str, Any] | None, int]:
         if not self.reading:
             return {"error": "no reading yet"}, 503
         body = format_status_json(self.reading, stale_seconds=int(self.config["stale_seconds"]))
         return body, 200
+
+
+def retention_window(config: dict[str, Any]) -> timedelta:
+    return timedelta(
+        hours=int(
+            config.get("history_retention_hours", DEFAULT_CONFIG["history_retention_hours"])
+        )
+    )
 
 
 def write_reader_state(sensor: RoomSensor, state: str) -> None:
@@ -388,6 +788,8 @@ async def run_daemon() -> None:
     if not CONFIG_PATH.exists():
         save_config(config)
     sensor = RoomSensor(config)
+    if config.get("history", True):
+        prune_history(retention_window(config))
     if not str(config.get("address") or "").strip() and not sensor.reading:
         write_reader_state(sensor, "unbound")
     stop = asyncio.Event()
@@ -471,11 +873,19 @@ async def run_discover(timeout: float = 20.0) -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="SwitchBot T/H room sensor")
     parser.add_argument("--print", action="store_true", help="print last reading and exit")
+    parser.add_argument(
+        "--since",
+        metavar="DURATION",
+        help="summarize recorded history over this window (45s, 90m, 2h, 3d, 1h30m)",
+    )
+    parser.add_argument("--json", action="store_true", help="machine-readable --since output")
     parser.add_argument("--once", action="store_true", help="scan until one reading, then print")
     parser.add_argument("--discover", action="store_true", help="list nearby SwitchBot T/H meters")
     parser.add_argument("--bind", metavar="MAC", help="bind this meter MAC and write config")
     parser.add_argument("--timeout", type=float, default=20.0)
     args = parser.parse_args(argv)
+    if args.since:
+        return history_command(args.since, as_json=args.json)
     if args.print:
         return print_cli()
     if args.bind:

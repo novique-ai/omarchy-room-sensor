@@ -39,6 +39,7 @@ No pairing and no SwitchBot hub. The meter must be powered and in range.
 | Details | Click the pill |
 | Notify | Right-click the pill |
 | CLI | `room-temp` |
+| Trend | `room-temp --since 1h` |
 
 ## Settings
 
@@ -54,6 +55,41 @@ Move the pill if you want it somewhere else:
 ```bash
 omarchy bar move novique.room --section right
 ```
+
+## History
+
+The reader keeps a rolling log of samples at `~/.local/state/room-sensor/history.jsonl`,
+one compact JSON object per line and at most one a minute.
+
+```bash
+room-temp --since 1h
+room-temp --since 6h --json
+```
+
+`45s`, `90m`, `2h`, `3d` and `1h30m` all work; a bare number means minutes.
+
+```
+Last 1h — 61 samples, 06:08 → 07:08
+
+Temperature: 73.2°F → 74.1°F  (+0.9°F / +0.5°C)
+             min 73.0°F  max 74.3°F  avg 73.6°F
+             ▁▂▂▃▄▄▅▆▆▇█
+
+Humidity:    52% → 50%  (-2%)
+             min 50%  max 52%  avg 51%
+             ██▇▆▅▄▃▂▁▁▁
+```
+
+Recording is on by default and costs roughly a megabyte a week. Old rows are pruned on
+startup and as the file grows. Tune it in `~/.config/room-sensor/config.json`:
+
+| Key | Default | Meaning |
+|---|---|---|
+| `history` | `true` | Record samples at all. |
+| `history_interval_seconds` | `60` | Minimum gap between recorded samples. |
+| `history_retention_hours` | `168` | Drop rows older than this. |
+
+It is plain JSONL, so `tail`, `jq`, and `rm` all behave the way you would expect.
 
 ## Remove
 

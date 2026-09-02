@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "novique.room",
   "name": "Room",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "author": "Novique",
   "license": "MIT",
   "description": "Indoor temperature and humidity from a local SwitchBot BLE meter.",

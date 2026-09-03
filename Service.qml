@@ -76,6 +76,8 @@ Item {
         payload.rssi = reading.rssi
       if (reading.co2 !== null && reading.co2 !== undefined)
         payload.co2 = reading.co2
+      if (reading.trend)
+        payload.trend = reading.trend
       reading = Model.parseStatus(JSON.stringify(payload), nowMs, staleSeconds)
     }
   }

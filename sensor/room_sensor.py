@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Local SwitchBot Meter Plus reader: BLE advertisements → CLI + HTTP /status."""
+"""Local SwitchBot Meter Plus reader: BLE advertisements → CLI + HTTP /status and /history."""
 from __future__ import annotations
 
 import argparse
@@ -228,7 +228,12 @@ def format_cli(reading: dict[str, Any], now: datetime | None = None, stale_secon
     return "\n".join(lines) + "\n"
 
 
-def format_status_json(reading: dict[str, Any], now: datetime | None = None, stale_seconds: int = 120) -> dict[str, Any]:
+def format_status_json(
+    reading: dict[str, Any],
+    now: datetime | None = None,
+    stale_seconds: int = 120,
+    trend: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     now = now or now_local()
     body: dict[str, Any] = {
         "temperature_f": reading.get("temperature_f"),
@@ -244,6 +249,8 @@ def format_status_json(reading: dict[str, Any], now: datetime | None = None, sta
     }
     if reading.get("co2") is not None:
         body["co2"] = reading["co2"]
+    if trend:
+        body["trend"] = trend
     return body
 
 
@@ -479,6 +486,67 @@ def summarize_history(
     return summary
 
 
+def _window_tag(window: timedelta) -> str:
+    seconds = int(window.total_seconds())
+    if seconds % 86400 == 0:
+        return f"{seconds // 86400}d"
+    if seconds % 3600 == 0:
+        return f"{seconds // 3600}h"
+    if seconds % 60 == 0:
+        return f"{seconds // 60}m"
+    return f"{seconds}s"
+
+
+def trend_block(
+    rows: list[dict[str, Any]],
+    window: timedelta,
+    spark_width: int = 24,
+) -> dict[str, Any] | None:
+    """Pre-computed panel payload: summary + a short °F sparkline."""
+    summary = summarize_history(rows, window)
+    if not summary:
+        return None
+    ordered = _ordered(rows)
+    temps = [float(r["temperature_f"]) for r in ordered if _numeric(r, "temperature_f")]
+    block: dict[str, Any] = {
+        "window": _window_tag(window),
+        "window_seconds": summary.get("window_seconds"),
+        "samples": summary["samples"],
+        "first_time": summary["first_time"],
+        "last_time": summary["last_time"],
+        "series": summary["series"],
+    }
+    if temps:
+        block["spark_f"] = sparkline(temps, spark_width)
+    return block
+
+
+def current_trend(window: timedelta | None = None, spark_width: int = 24) -> dict[str, Any] | None:
+    span = window or timedelta(hours=1)
+    return trend_block(read_history(since=span), span, spark_width=spark_width)
+
+
+def history_payload(
+    since_text: str,
+    rows: list[dict[str, Any]] | None = None,
+    now: datetime | None = None,
+) -> tuple[dict[str, Any], int]:
+    """JSON body + HTTP status for GET /history?since=… (same object as --since --json)."""
+    try:
+        window = parse_duration(since_text)
+    except ValueError as exc:
+        return {"error": str(exc)}, 400
+    if rows is None:
+        rows = read_history(since=window, now=now)
+    summary = summarize_history(rows, window)
+    if summary is None:
+        return {
+            "error": f"no readings recorded in the last {window_label(since_text)}",
+            "window": window_label(since_text),
+        }, 404
+    return summary, 200
+
+
 def _resample(values: list[float], width: int) -> list[float]:
     if len(values) <= width:
         return [float(v) for v in values]
@@ -661,7 +729,7 @@ class RoomSensor:
                 return
             self.reading = reading
             self._last_packet_monotonic = asyncio.get_running_loop().time()
-            atomic_write_json(STATE_PATH, reading)
+            atomic_write_json(STATE_PATH, with_trend(reading))
             self.record_history(reading)
 
     def record_history(self, reading: dict[str, Any]) -> bool:
@@ -691,7 +759,11 @@ class RoomSensor:
     def status_payload(self) -> tuple[dict[str, Any] | None, int]:
         if not self.reading:
             return {"error": "no reading yet"}, 503
-        body = format_status_json(self.reading, stale_seconds=int(self.config["stale_seconds"]))
+        body = format_status_json(
+            self.reading,
+            stale_seconds=int(self.config["stale_seconds"]),
+            trend=current_trend() if self.config.get("history", True) else None,
+        )
         return body, 200
 
 
@@ -703,12 +775,22 @@ def retention_window(config: dict[str, Any]) -> timedelta:
     )
 
 
+def with_trend(reading: dict[str, Any]) -> dict[str, Any]:
+    payload = dict(reading)
+    trend = current_trend()
+    if trend:
+        payload["trend"] = trend
+    else:
+        payload.pop("trend", None)
+    return payload
+
+
 def write_reader_state(sensor: RoomSensor, state: str) -> None:
     payload = dict(sensor.reading or {})
     payload["reader_state"] = state
     if sensor.reading:
         sensor.reading = payload
-    atomic_write_json(STATE_PATH, payload)
+    atomic_write_json(STATE_PATH, with_trend(payload) if payload else payload)
 
 
 async def run_scanner(sensor: RoomSensor, stop: asyncio.Event) -> None:
@@ -768,9 +850,20 @@ async def run_http(sensor: RoomSensor, stop: asyncio.Event) -> None:
         body, code = sensor.status_payload()
         return web.json_response(body, status=code)
 
+    async def history(request: web.Request) -> web.Response:
+        since = request.query.get("since", "")
+        if not since:
+            return web.json_response(
+                {"error": "missing since query parameter; try /history?since=1h"},
+                status=400,
+            )
+        body, code = history_payload(since)
+        return web.json_response(body, status=code)
+
     app = web.Application()
     app.router.add_get("/status", status)
     app.router.add_get("/", status)
+    app.router.add_get("/history", history)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, sensor.config["listen"], int(sensor.config["port"]))

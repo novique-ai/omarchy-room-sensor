@@ -105,6 +105,24 @@ Panel {
 
         Text {
           width: parent.width
+          visible: root.available && Model.trendCaption(reading).length > 0
+          text: Model.trendCaption(reading)
+          color: Color.muted
+          font.family: Style.font.family
+          font.pixelSize: Style.font.caption
+        }
+
+        Text {
+          width: parent.width
+          visible: root.available && Model.trendSpark(reading).length > 0
+          text: Model.trendSpark(reading)
+          color: Color.muted
+          font.family: Style.font.family
+          font.pixelSize: Style.font.caption
+        }
+
+        Text {
+          width: parent.width
           visible: root.available && reading.co2 !== undefined && reading.co2 !== null
           text: root.available && reading.co2 !== undefined && reading.co2 !== null
             ? "CO₂  " + reading.co2 + " ppm"

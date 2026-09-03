@@ -15,7 +15,8 @@ function emptyReading() {
     address: "",
     model: "",
     reader_state: "",
-    available: false
+    available: false,
+    trend: null
   }
 }
 
@@ -66,9 +67,27 @@ function parseStatus(text, nowMs, staleSeconds) {
   reading.rssi = optionalInt(raw.rssi)
   reading.co2 = optionalInt(raw.co2)
   reading.last_seen = raw.last_seen ? String(raw.last_seen) : null
+  reading.trend = raw.trend && typeof raw.trend === "object" ? raw.trend : null
   reading.available = true
   reading.stale = isStale(reading, nowMs, staleSeconds)
   return reading
+}
+
+function trendCaption(reading) {
+  var series = reading && reading.trend && reading.trend.series
+  var tf = series && series.temperature_f
+  if (!tf || tf.delta === null || tf.delta === undefined) return ""
+  var d = Number(tf.delta)
+  if (!isFinite(d)) return ""
+  var shown = d > 0 ? "+" + String(d) : (d < 0 ? String(d) : "±0")
+  var window = reading.trend.window ? String(reading.trend.window) : "1h"
+  if (window === "1h") return shown + "°F in the last hour"
+  return shown + "°F in the last " + window
+}
+
+function trendSpark(reading) {
+  if (!reading || !reading.trend || !reading.trend.spark_f) return ""
+  return String(reading.trend.spark_f)
 }
 
 function formatTemp(reading, unit) {

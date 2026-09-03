@@ -134,6 +134,50 @@ test("lowBattery at 15 percent", () => {
   assert.equal(Model.lowBattery(ok), false)
 })
 
+test("parses a 1h trend block from status.json", () => {
+  const reading = Model.parseStatus(JSON.stringify({
+    temperature_f: 74.1,
+    temperature_c: 23.4,
+    humidity: 50,
+    last_seen: "2026-09-02T07:08:00-05:00",
+    trend: {
+      window: "1h",
+      samples: 4,
+      spark_f: "▁▂▇█",
+      series: { temperature_f: { first: 73.2, last: 74.1, delta: 0.9 } }
+    }
+  }), NOW, 120)
+  assert.equal(reading.available, true)
+  assert.equal(reading.trend.samples, 4)
+  assert.equal(Model.trendCaption(reading), "+0.9°F in the last hour")
+  assert.equal(Model.trendSpark(reading), "▁▂▇█")
+})
+
+test("trend caption signs a drop and a flat window", () => {
+  const drop = Model.parseStatus(JSON.stringify({
+    temperature_f: 71.1,
+    temperature_c: 21.7,
+    humidity: 54,
+    last_seen: "2026-09-02T07:08:00-05:00",
+    trend: { window: "1h", series: { temperature_f: { delta: -3.2 } } }
+  }), NOW, 120)
+  assert.equal(Model.trendCaption(drop), "-3.2°F in the last hour")
+  const flat = Model.parseStatus(JSON.stringify({
+    temperature_f: 71.1,
+    temperature_c: 21.7,
+    humidity: 54,
+    last_seen: "2026-09-02T07:08:00-05:00",
+    trend: { window: "1h", series: { temperature_f: { delta: 0 } } }
+  }), NOW, 120)
+  assert.equal(Model.trendCaption(flat), "±0°F in the last hour")
+})
+
+test("no trend block means no caption", () => {
+  const reading = Model.parseStatus(SAMPLE, NOW, 120)
+  assert.equal(Model.trendCaption(reading), "")
+  assert.equal(Model.trendSpark(reading), "")
+})
+
 test("null co2 battery rssi stay null", () => {
   const reading = Model.parseStatus(JSON.stringify({
     temperature_f: 73.4,

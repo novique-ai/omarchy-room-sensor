@@ -539,6 +539,68 @@ class SparklineTests(unittest.TestCase):
         self.assertEqual(rs.sparkline([]), "")
 
 
+class HistoryPayloadTests(HistorySummaryTests):
+    def test_valid_since_returns_the_json_summary(self):
+        body, code = rs.history_payload("1h", rows=self.rows())
+        self.assertEqual(code, 200)
+        self.assertEqual(body["samples"], 4)
+        self.assertEqual(body["window_seconds"], 3600)
+        self.assertEqual(body["series"]["temperature_f"]["delta"], 0.9)
+
+    def test_bad_duration_is_400(self):
+        body, code = rs.history_payload("soon", rows=self.rows())
+        self.assertEqual(code, 400)
+        self.assertIn("error", body)
+
+    def test_empty_window_is_404(self):
+        body, code = rs.history_payload("1h", rows=[])
+        self.assertEqual(code, 404)
+        self.assertIn("error", body)
+
+    def test_reads_the_history_file_when_rows_omitted(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "history.jsonl"
+            with patch.object(rs, "HISTORY_PATH", path):
+                rs.append_history(history_row_at(50, temp_f=73.2, temp_c=22.9))
+                rs.append_history(history_row_at(10, temp_f=74.1, temp_c=23.4))
+                body, code = rs.history_payload("1h")
+            self.assertEqual(code, 200)
+            self.assertEqual(body["samples"], 2)
+            self.assertEqual(body["series"]["temperature_f"]["delta"], 0.9)
+
+
+class TrendBlockTests(HistorySummaryTests):
+    def test_trend_block_adds_a_spark_for_the_panel(self):
+        block = rs.trend_block(self.rows(), timedelta(hours=1), spark_width=8)
+        self.assertEqual(block["window"], "1h")
+        self.assertEqual(block["samples"], 4)
+        self.assertEqual(block["series"]["temperature_f"]["delta"], 0.9)
+        self.assertEqual(len(block["spark_f"]), 4)
+        self.assertTrue(set(block["spark_f"]) <= set(rs.SPARK_CHARS))
+
+    def test_empty_rows_have_no_trend(self):
+        self.assertIsNone(rs.trend_block([], timedelta(hours=1)))
+
+    def test_status_json_carries_trend_when_given(self):
+        last_seen = datetime(2026, 9, 2, 7, 8, tzinfo=timezone(timedelta(hours=-5)))
+        reading = {
+            "address": CAPTURED_ADDR,
+            "temperature_c": 23.4,
+            "temperature_f": 74.1,
+            "humidity": 50,
+            "battery": 100,
+            "rssi": -65,
+            "last_seen": last_seen.isoformat(),
+            "reader_state": "ok",
+        }
+        trend = rs.trend_block(self.rows(), timedelta(hours=1), spark_width=8)
+        payload = rs.format_status_json(
+            reading, now=last_seen, stale_seconds=120, trend=trend
+        )
+        self.assertEqual(payload["trend"]["samples"], 4)
+        self.assertEqual(payload["trend"]["series"]["temperature_f"]["delta"], 0.9)
+
+
 class HistoryRecordTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self._tmpdir = tempfile.TemporaryDirectory()

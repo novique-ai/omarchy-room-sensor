@@ -4,7 +4,7 @@ Indoor temperature and humidity on the Omarchy bar, from a local SwitchBot meter
 
 ![Room temperature on the Omarchy bar](preview.png)
 
-The pill sits in the **center** of the bar and shows something like `73.6°  52%`. Click it for both units, humidity, battery, RSSI, and last-seen. A dimmed pill means the last reading is older than two minutes.
+The pill sits in the **center** of the bar and shows something like `73.6°  52%`. Click it for both units, humidity, the last-hour trend, battery, RSSI, and last-seen. A dimmed pill means the last reading is older than two minutes.
 
 Works with SwitchBot Meter, Meter Plus, Indoor/Outdoor Meter, Meter Pro, and Meter Pro CO2. One meter per install.
 
@@ -36,7 +36,7 @@ No pairing and no SwitchBot hub. The meter must be powered and in range.
 | Action | How |
 |---|---|
 | Read | Look at the bar: `73.6°  52%` |
-| Details | Click the pill |
+| Details | Click the pill — includes `+0.9°F in the last hour` and a sparkline |
 | Notify | Right-click the pill |
 | CLI | `room-temp` |
 | Trend | `room-temp --since 1h` |
@@ -90,6 +90,11 @@ startup and as the file grows. Tune it in `~/.config/room-sensor/config.json`:
 | `history_retention_hours` | `168` | Drop rows older than this. |
 
 It is plain JSONL, so `tail`, `jq`, and `rm` all behave the way you would expect.
+
+The reader also writes a `trend` block (last hour) into `status.json` so the details
+panel does not have to parse the JSONL. If you turn the optional status server on
+(`"http": true` in `config.json`), the same summary as `room-temp --since 1h --json`
+is at `http://127.0.0.1:18787/history?since=1h`. A bad duration is HTTP 400.
 
 ## Remove
 
